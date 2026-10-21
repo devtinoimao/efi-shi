@@ -1,6 +1,6 @@
 name: Autonomous Cloud EFI Windows Tester
 on:
-  workflow_dispatch: # Allows you to start the test manually with one click
+  workflow_dispatch:
 
 jobs:
   agent_test_environment:
@@ -16,25 +16,41 @@ jobs:
 
       - name: Asynchronous Code Generation (AI Layer)
         env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_API_KEY: \${{ secrets.OPENCODE_API_KEY }}
         run: |
-          # 1. Generate main.c using the free Beam model
-          curl -X POST "https://opencode.ai" \
-            -H "Authorization: Bearer $OPENCODE_API_KEY" \
+          # 1. Generate main.c using Beam Free
+          RESPONSE_BEAM=\$(curl -s -X POST "https://opencode.ai" \
+            -H "Authorization: Bearer \$OPENCODE_API_KEY" \
             -H "Content-Type: application/json" \
             -d '{
               "model": "beam-free",
               "messages": [{"role": "user", "content": "Write raw C code for a 64-bit UEFI bootloader main.c. It must locate an external function called TransitionTo32BitAndJump, print a loading message to the screen, and call it. Do not include markdown, backticks, or text descriptions. Output only code."}]
-            }' | jq -r '.choices[0].message.content' > main.c
+            }')
+          
+          if echo "\$RESPONSE_BEAM" | jq -e '.choices' >/dev/null 2>&1; then
+            echo "\$RESPONSE_BEAM" | jq -r '.choices[0].message.content' > main.c
+          else
+            echo "API Error on Beam. Raw response was:"
+            echo "\$RESPONSE_BEAM"
+            exit 1
+          fi
 
-          # 2. Generate transition.asm using the free MiniMax 3.1 Flash model
-          curl -X POST "https://opencode.ai" \
-            -H "Authorization: Bearer $OPENCODE_API_KEY" \
+          # 2. Generate transition.asm using MiniMax 3.1 Flash
+          RESPONSE_MINIMAX=\$(curl -s -X POST "https://opencode.ai" \
+            -H "Authorization: Bearer \$OPENCODE_API_KEY" \
             -H "Content-Type: application/json" \
             -d '{
               "model": "minimax-m3.1-flash",
               "messages": [{"role": "user", "content": "Write raw x86_64 NASM assembly code for a function named TransitionTo32BitAndJump. It must disable interrupts, load a basic 32-bit GDT, switch the CPU data segments to 32-bit mode, disable paging in CR0, and jump to a 32-bit address passed in RCX. Do not include markdown or text descriptions. Output only code."}]
-            }' | jq -r '.choices[0].message.content' > transition.asm
+            }')
+
+          if echo "\$RESPONSE_MINIMAX" | jq -e '.choices' >/dev/null 2>&1; then
+            echo "\$RESPONSE_MINIMAX" | jq -r '.choices[0].message.content' > transition.asm
+          else
+            echo "API Error on MiniMax. Raw response was:"
+            echo "\$RESPONSE_MINIMAX"
+            exit 1
+          fi
 
       - name: Compile Cross-Architecture Binary
         run: |
@@ -44,19 +60,13 @@ jobs:
       - name: Setup Windows 32-bit Testing Directory Structure
         run: |
           mkdir -p iso_root/EFI/BOOT
-          # Place your compiled 64-bit custom wrapper into the primary boot path
           cp BOOTX64.EFI iso_root/EFI/BOOT/BOOTX64.EFI
-          
-          # Create a dummy target file structure to simulate the 32-bit OS payload
           mkdir -p iso_root/sources
           echo "Target 32-Bit environment executable structure" > iso_root/sources/boot.wim
 
       - name: Run Unattended Cloud Emulation Test
         run: |
           echo "Starting headless QEMU simulation..."
-          
-          # Run QEMU in the background. 
-          # -bios /usr/share/ovmf/OVMF.fd provides the 64-bit UEFI runtime environment.
           qemu-system-x86_64 \
             -bios /usr/share/ovmf/OVMF.fd \
             -drive format=raw,file=fat:rw:iso_root \
@@ -64,12 +74,32 @@ jobs:
             -nographic \
             -serial file:boot_execution_logs.txt &
           
-          # Let it boot and attempt the 32-bit handoff for 60 seconds while your PC is off
           sleep 60
           killall qemu-system-x86_64 || true
 
-      - name: Upload Test Results
+      - name: Document Run Context (Step Explanations)
+        run: |
+          echo "### 🚀 Autonomous Run Summary" >> \$GITHUB_STEP_SUMMARY
+          echo "This pipeline executed asynchronously in the cloud while your machine was offline." >> \$GITHUB_STEP_SUMMARY
+          echo "#### 🛠️ Tasks Performed:" >> \$GITHUB_STEP_SUMMARY
+          echo "1. **Code Generation**: Queried \`beam-free\` for \`main.c\` structure and \`minimax-m3.1-flash\` for low-level architecture execution assembly (\`transition.asm\`)." >> \$GITHUB_STEP_SUMMARY
+          echo "2. **Cross-Compilation**: Combined code using GCC cross-compilers targeting \`BOOTX64.EFI\`." >> \$GITHUB_STEP_SUMMARY
+          echo "3. **Runtime Analysis**: Launched headless QEMU x86 emulation with full OVMF firmware to track x64 down-switching behaviors." >> \$GITHUB_STEP_SUMMARY
+          echo "#### 📂 Artifacts Saved:" >> \$GITHUB_STEP_SUMMARY
+          echo "* \`BOOTX64.EFI\` (Finished compiled payload)" >> \$GITHUB_STEP_SUMMARY
+          echo "* \`boot_execution_logs.txt\` (Raw output traces)" >> \$GITHUB_STEP_SUMMARY
+
+      - name: Upload Source Code and EFI Binary
         uses: actions/upload-artifact@v4
         with:
-          name: windows-32bit-execution-logs
+          name: compiled-efi-and-sources
+          path: |
+            main.c
+            transition.asm
+            BOOTX64.EFI
+
+      - name: Upload Emulation Test Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-emulation-test-logs
           path: boot_execution_logs.txt
