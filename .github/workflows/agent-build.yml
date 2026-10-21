@@ -18,7 +18,7 @@ jobs:
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
-          # Query beam-free for main c source structure
+          # Query beam-free for main c source structure using the verified inference API router
           RESPONSE_BEAM=$(curl -s -X POST "https://opencode.ai" \
             -H "Authorization: Bearer $OPENCODE_API_KEY" \
             -H "Content-Type: application/json" \
@@ -35,7 +35,7 @@ jobs:
             exit 1
           fi
 
-          # Query minimax-m3.1-flash for mode switch assembly
+          # Query minimax-m3.1-flash for mode switch assembly using the verified inference API router
           RESPONSE_MINIMAX=$(curl -s -X POST "https://opencode.ai" \
             -H "Authorization: Bearer $OPENCODE_API_KEY" \
             -H "Content-Type: application/json" \
