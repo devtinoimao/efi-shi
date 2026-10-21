@@ -16,46 +16,47 @@ jobs:
 
       - name: Asynchronous Code Generation (AI Layer)
         env:
-          OPENCODE_API_KEY: \${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
-          # 1. Generate main.c using Beam Free over the verified Zen completions router
-          RESPONSE_BEAM=\$(curl -s -X POST "https://opencode.ai" \
-            -H "Authorization: Bearer \$OPENCODE_API_KEY" \
+          set -euo pipefail
+
+          RESPONSE_BEAM=$(curl -fsSL -X POST "https://opencode.ai" \
+            -H "Authorization: Bearer $OPENCODE_API_KEY" \
             -H "Content-Type: application/json" \
             -d '{
               "model": "beam-free",
-              "messages": [{"role": "user", "content": "Write raw C code for a 64-bit UEFI bootloader main.c. It must locate an external function called TransitionTo32BitAndJump, print a loading message to the screen, and call it. Do not include markdown, backticks, or text descriptions. Output only code."}]
+              "messages": [{"role": "user", "content": "Write raw C code for a 64-bit UEFI bootloader main.c. It must locate an external function called TransitionTo32BitAndJump, print a loading message, and provide a valid EFI entry point."}]
             }')
-          
-          if echo "\$RESPONSE_BEAM" | jq -e '.choices' >/dev/null 2>&1; then
-            echo "\$RESPONSE_BEAM" | jq -r '.choices[0].message.content' > main.c
+
+          if echo "$RESPONSE_BEAM" | jq -e '.choices' >/dev/null 2>&1; then
+            echo "$RESPONSE_BEAM" | jq -r '.choices[0].message.content' > main.c
           else
             echo "API Error on Beam endpoint. Raw server output was:"
-            echo "\$RESPONSE_BEAM"
+            echo "$RESPONSE_BEAM"
             exit 1
           fi
 
-          # 2. Generate transition.asm using MiniMax 3.1 Flash over the verified Zen completions router
-          RESPONSE_MINIMAX=\$(curl -s -X POST "https://opencode.ai" \
-            -H "Authorization: Bearer \$OPENCODE_API_KEY" \
+          RESPONSE_MINIMAX=$(curl -fsSL -X POST "https://opencode.ai" \
+            -H "Authorization: Bearer $OPENCODE_API_KEY" \
             -H "Content-Type: application/json" \
             -d '{
               "model": "minimax-m3.1-flash",
-              "messages": [{"role": "user", "content": "Write raw x86_64 NASM assembly code for a function named TransitionTo32BitAndJump. It must disable interrupts, load a basic 32-bit GDT, switch the CPU data segments to 32-bit mode, disable paging in CR0, and jump to a 32-bit address passed in RCX. Do not include markdown or text descriptions. Output only code."}]
+              "messages": [{"role": "user", "content": "Write raw x86_64 NASM assembly code for a function named TransitionTo32BitAndJump. It must disable interrupts, load a basic 32-bit GDT, switch to protected mode, and jump to a 32-bit entry point."}]
             }')
 
-          if echo "\$RESPONSE_MINIMAX" | jq -e '.choices' >/dev/null 2>&1; then
-            echo "\$RESPONSE_MINIMAX" | jq -r '.choices[0].message.content' > transition.asm
+          if echo "$RESPONSE_MINIMAX" | jq -e '.choices' >/dev/null 2>&1; then
+            echo "$RESPONSE_MINIMAX" | jq -r '.choices[0].message.content' > transition.asm
           else
             echo "API Error on MiniMax endpoint. Raw server output was:"
-            echo "\$RESPONSE_MINIMAX"
+            echo "$RESPONSE_MINIMAX"
             exit 1
           fi
 
       - name: Compile Cross-Architecture Binary
         run: |
+          set -euo pipefail
           nasm -f win64 transition.asm -o transition.o
-          x86_64-w64-mingw-w64-gcc -Wall -Wextra -e efi_main -nostdlib -fno-builtin -Wl,--subsystem,10 main.c transition.o -o BOOTX64.EFI
+          x86_64-w64-mingw32-gcc -Wall -Wextra -Wl,--subsystem,10 -nostdlib -fno-builtin -e efi_main main.c transition.o -o BOOTX64.EFI
 
       - name: Setup Windows 32-bit Testing Directory Structure
         run: |
@@ -73,21 +74,21 @@ jobs:
             -m 1024 \
             -nographic \
             -serial file:boot_execution_logs.txt &
-          
+
           sleep 60
           killall qemu-system-x86_64 || true
 
       - name: Document Run Context (Step Explanations)
         run: |
-          echo "### 🚀 Autonomous Run Summary" >> \$GITHUB_STEP_SUMMARY
-          echo "This pipeline executed asynchronously in the cloud while your machine was offline." >> \$GITHUB_STEP_SUMMARY
-          echo "#### 🛠️ Tasks Performed:" >> \$GITHUB_STEP_SUMMARY
-          echo "1. **Code Generation**: Queried \`beam-free\` for \`main.c\` structure and \`minimax-m3.1-flash\` for low-level architecture execution assembly (\`transition.asm\`)." >> \$GITHUB_STEP_SUMMARY
-          echo "2. **Cross-Compilation**: Combined code using GCC cross-compilers targeting \`BOOTX64.EFI\`." >> \$GITHUB_STEP_SUMMARY
-          echo "3. **Runtime Analysis**: Launched headless QEMU x86 emulation with full OVMF firmware to track x64 down-switching behaviors." >> \$GITHUB_STEP_SUMMARY
-          echo "#### 📂 Artifacts Saved:" >> \$GITHUB_STEP_SUMMARY
-          echo "* \`BOOTX64.EFI\` (Finished compiled payload)" >> \$GITHUB_STEP_SUMMARY
-          echo "* \`boot_execution_logs.txt\` (Raw output traces)" >> \$GITHUB_STEP_SUMMARY
+          echo "### 🚀 Autonomous Run Summary" >> $GITHUB_STEP_SUMMARY
+          echo "This pipeline executed asynchronously in the cloud while your machine was offline." >> $GITHUB_STEP_SUMMARY
+          echo "#### 🛠️ Tasks Performed:" >> $GITHUB_STEP_SUMMARY
+          echo "1. **Code Generation**: Queried \`beam-free\` for \`main.c\` structure and \`minimax-m3.1-flash\` for low-level architecture execution assembly (\`transition.asm\`)." >> $GITHUB_STEP_SUMMARY
+          echo "2. **Cross-Compilation**: Combined code using GCC cross-compilers targeting \`BOOTX64.EFI\`." >> $GITHUB_STEP_SUMMARY
+          echo "3. **Runtime Analysis**: Launched headless QEMU x86 emulation with full OVMF firmware to track x64 down-switching behaviors." >> $GITHUB_STEP_SUMMARY
+          echo "#### 📂 Artifacts Saved:" >> $GITHUB_STEP_SUMMARY
+          echo "* \`BOOTX64.EFI\` (Finished compiled payload)" >> $GITHUB_STEP_SUMMARY
+          echo "* \`boot_execution_logs.txt\` (Raw output traces)" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Source Code and EFI Binary
         uses: actions/upload-artifact@v4
